@@ -1,5 +1,5 @@
 /***************************************************************
- * Script: cre_pkg_idx_api_vX.X.sql
+ * Script: R__1_3_pkg_idx_api.sql
  * Description:
  * ************
  * This script will create objects for index administration.
@@ -8,10 +8,6 @@
  * - TYPE: IDX_API_CT (Collection Type)
  * - PACKAGE: IDX_API
  ***************************************************************/
--- drop package adm_idx;
--- drop type idx_api_ct;
--- drop type idx_api_ot;
-
 CREATE OR REPLACE TYPE idx_api_ot FORCE AS OBJECT (
    table_name     varchar2(128),
    index_name     varchar2(128),
@@ -61,7 +57,23 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
    -- **********************************************************
    -- For Debug
    -- **********************************************************
-   
+   procedure insert_success(text_i IN clob) as
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      v_txt    VARCHAR2(4000);
+   begin
+      insert into idx_api_log (log_message, status) values (text_i, 'S');
+      commit;
+   end;
+
+   procedure insert_error(text_i IN clob, errcode_i IN number, errmsg_i IN varchar2) as
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      v_txt    VARCHAR2(4000);
+   begin
+      insert into idx_api_log (log_message, status, error_code, error_msg)
+         values (text_i, 'E', errcode_i, errmsg_i);
+      commit;
+   end;
+
    
    -- **********************************************************
    -- PRIVATE procedures
@@ -81,7 +93,7 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
    procedure dropIndex(idx_i IN varchar2) as
       l_sql varchar2(1000);
    begin
-      l_sql := 'drop index ' || USER || '.' || idx_i;
+      l_sql := 'drop index ' || USER || '."' || idx_i || '"';
       execute immediate l_sql;
       dbms_output.put_line('SUCCESS: ' || l_sql);
    exception when others then
@@ -92,7 +104,7 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
    procedure renameIndex(old_i IN varchar2, new_i IN varchar2) as
       l_sql varchar2(1000);
    begin
-      l_sql := 'alter index ' || USER || '.' || old_i || ' rename to ' || new_i;
+      l_sql := 'alter index ' || USER || '."' || old_i || '" rename to ' || new_i;
       execute immediate l_sql;
       dbms_output.put_line('SUCCESS: ' || l_sql);
    exception when others then
@@ -327,17 +339,20 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
                          e.is_unique      e_is_unique,
                          case when e.table_name is null        then 'CREATE'
                               when l.table_name is null        then 'DROP'
-                              when l.index_name<>e.index_name
-                               and l.table_name=e.table_name
-                               and l.column_list=e.column_list 
+                              when upper(l.index_name)<>upper(e.index_name)
+                               and upper(l.table_name)=upper(e.table_name)
+                               and upper(l.column_list)=upper(e.column_list) 
                                and l.is_unique=e.is_unique     then 'RENAME'
-                              when l.table_name=e.table_name
-                                 and l.index_name=e.index_name
+                              when upper(l.table_name)=upper(e.table_name)
+                                 and upper(l.index_name)=upper(e.index_name)
                                  and l.is_unique=e.is_unique   then 'EXIST'
                                                                else 'RECREATE' end action
                   from table(idx_list_i) l FULL JOIN ind_list e
-                     ON (l.table_name=e.table_name
-                           and (l.index_name=e.index_name or l.column_list=e.column_list))
+                     ON (upper(l.table_name)=upper(e.table_name)
+                           and (upper(l.index_name) = upper(e.index_name) or 
+                                upper(l.column_list)= upper(e.column_list)
+                               )
+                        )
                   order by nvl(l.table_name, e.table_name);
       else
          open resultSet for 
@@ -371,17 +386,17 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
                          e.is_unique      e_is_unique,
                          case when e.table_name is null        then 'CREATE'
                               when l.table_name is null        then 'DROP'
-                              when l.index_name<>e.index_name
-                               and l.table_name=e.table_name
-                               and l.column_list=e.column_list 
+                              when upper(l.index_name)<>upper(e.index_name)
+                               and upper(l.table_name)=upper(e.table_name)
+                               and upper(l.column_list)=upper(e.column_list)
                                and l.is_unique=e.is_unique     then 'RENAME'
-                              when l.table_name=e.table_name
-                                 and l.index_name=e.index_name
+                              when upper(l.table_name)=upper(e.table_name)
+                                 and upper(l.index_name)=upper(e.index_name)
                                  and l.is_unique=e.is_unique   then 'EXIST'
                                                                else 'RECREATE' end action
                   from table(idx_list_i) l FULL JOIN ind_list e
-                     ON (l.table_name=e.table_name
-                           and (l.index_name=e.index_name or l.column_list=e.column_list))
+                     ON (upper(l.table_name)=upper(e.table_name)
+                           and (upper(l.index_name)=upper(e.index_name) or upper(l.column_list)=upper(e.column_list)))
                   order by nvl(l.table_name, e.table_name);
       end if;
       
@@ -493,6 +508,8 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
       l_unique_exist    varchar2(1);
       
       l_action          varchar2(20);
+
+      l_debug           varchar2(4000);
       
    begin
       ------------------------------------------
@@ -508,9 +525,11 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
          fetch l_rc into l_tbl_name_list,  l_idx_name_list,  l_cols_list, l_unique_list, 
                          l_tbl_name_exist, l_idx_name_exist, l_cols_exist, l_unique_exist, l_action; 
          exit when l_rc%notfound;
-         --debug('TBL: ' ||  rpad(case when r.e_table_name is null then r.l_table_name else r.e_table_name end, 30,' ') || 
-         --      'LIST: ' || rpad(case when r.e_column_list is null then r.l_column_list else r.e_column_list end, 50,' ') || 
-         --      ' EXIST: ' || rpad(nvl(r.e_column_list,' - '),20,' ') || ' ACTION: ' || r.rec_action);
+         l_debug := l_debug || chr(10) ||
+                    'TBL: ' || rpad(case when l_tbl_name_exist is null then l_tbl_name_list else l_tbl_name_exist end, 30,' ') || 
+                    'IDX: ' || rpad(case when l_idx_name_exist is null then l_idx_name_list else l_idx_name_exist end, 30,' ') ||
+                    'LIST: ' || rpad(case when l_cols_exist is null then l_cols_list else l_cols_exist end, 50,' ') || 
+                    ' EXIST: ' || rpad(nvl(l_cols_exist,' - '),20,' ') || ' ACTION: ' || l_action;
 
          if (l_action='CREATE') then
             createIndex(l_tbl_name_list, l_idx_name_list, l_cols_list, l_unique_list);
@@ -524,10 +543,15 @@ CREATE OR REPLACE PACKAGE BODY idx_api AS
          end if;
          
       end loop;
+
+      insert_success(l_debug);
+   exception when others then
+      insert_error(l_debug, SQLCODE, SQLERRM);
+      raise;
    end;
 
 END idx_api;
 /
 
 
---grant execute on adm_idx to public;
+--grant execute on idx_api to public;
